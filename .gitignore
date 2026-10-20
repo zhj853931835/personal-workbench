@@ -1,0 +1,13 @@
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+
+# Runtime user data (never commit)
+工作台数据.json
+工作台数据.js
+
+# Local caches
+.cache/
+_devtest/
