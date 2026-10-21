@@ -72,10 +72,18 @@ def precheck():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("-m", "--message", required=True)
+    ap.add_argument("-m", "--message", default=None,
+                    help="commit message; prefer -F to avoid shell encoding issues")
+    ap.add_argument("-F", "--message-file", default=None,
+                    help="read commit message from this UTF-8 file (recommended)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-precheck", action="store_true")
     args = ap.parse_args()
+    if args.message_file:
+        with io.open(args.message_file, "r", encoding="utf-8") as fh:
+            args.message = fh.read().strip()
+    if not args.message:
+        ap.error("either -m or -F is required")
 
     print("=" * 58)
     print("REPO: " + REPO)
