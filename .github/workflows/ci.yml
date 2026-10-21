@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate single-file app
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify repository layout
+        run: |
+          set -e
+          for f in index.html README.md LICENSE app-icon.png; do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing required file: $f"
+              exit 1
+            fi
+            echo "ok: $f ($(wc -c < "$f") bytes)"
+          done
+
+      - name: Verify index.html is self-contained
+        run: |
+          set -e
+          f=index.html
+          if grep -nE '<script[^>]+src=' "$f"; then
+            echo "::error::external script src found; app must stay single-file"
+            exit 1
+          fi
+          if grep -nE "<link[^>]+rel=.stylesheet" "$f"; then
+            echo "::error::external stylesheet found; app must stay single-file"
+            exit 1
+          fi
+          echo "single-file check passed"
+
+      - name: Verify no leaked local paths or secrets
+        run: |
+          set -e
+          fail=0
+          if grep -nE 'C:\\\\Users\\\\[A-Za-z0-9_]' index.html; then
+            echo "::error::hardcoded Windows user path found"; fail=1
+          fi
+          if grep -nE '(ghp_[A-Za-z0-9]{20,}|github_pat_|AKIA[0-9A-Z]{16})' index.html; then
+            echo "::error::credential-like string found"; fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "privacy scan passed"
+
+      - name: Validate HTML structure
+        run: |
+          set -e
+          python3 - <<'PY'
+import html.parser, io, sys
+
+VOID = {"area","base","br","col","embed","hr","img","input",
+        "link","meta","param","source","track","wbr"}
+
+class P(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+        self.stray = []
+    def handle_starttag(self, tag, attrs):
+        if tag not in VOID:
+            self.stack.append(tag)
+    def handle_endtag(self, tag):
+        if tag in VOID:
+            return
+        if not self.stack:
+            self.stray.append(tag); return
+        if self.stack[-1] == tag:
+            self.stack.pop()
+        elif tag in self.stack:
+            while self.stack and self.stack[-1] != tag:
+                self.stack.pop()
+            if self.stack:
+                self.stack.pop()
+        else:
+            self.stray.append(tag)
+
+p = P()
+with io.open("index.html", "r", encoding="utf-8") as fh:
+    p.feed(fh.read())
+
+if p.stray:
+    print("stray closing tags: %s" % p.stray[:10])
+    sys.exit(1)
+print("HTML parse OK; open tags at EOF: %d" % len(p.stack))
+PY
+
+      - name: Check README references resolve
+        run: |
+          set -e
+          fail=0
+          for f in index.html LICENSE app-icon.png; do
+            if grep -q "$f" README.md && [ ! -f "$f" ]; then
+              echo "::error::README mentions $f but file is missing"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "README references ok"
+
+  size-budget:
+    name: Size budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: index.html must stay under 400 KB
+        run: |
+          set -e
+          size=$(wc -c < index.html)
+          echo "index.html = $size bytes"
+          if [ "$size" -gt 409600 ]; then
+            echo "::error::index.html exceeded 400 KB budget ($size bytes)"
+            exit 1
+          fi
+          echo "within budget"
